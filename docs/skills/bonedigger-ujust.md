@@ -1,6 +1,6 @@
 # bonedigger — ujust report tool
 
-Load when working on the client-side diagnostic reporting tool in `projectbluefin/common`: `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just`, `system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml`, or the OTel deep metrics capture.
+Load when working on the client-side diagnostic reporting tool in `projectbluefin/common`: `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just`, `system_files/bluefin/usr/libexec/bonedigger-report`, `system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml`, or the OTel deep metrics capture.
 
 ## Commands
 
@@ -212,6 +212,7 @@ The recipe and OTel config are **image content**, not CI tooling. They live in `
 | File | Path in common |
 |------|----------------|
 | `ujust report` recipe | `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just` |
+| Crash / panic detection | `system_files/bluefin/usr/libexec/bonedigger-report` |
 | OTel collector config | `system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml` |
 
 `common` ships both files to every image via `common.bst`. Dakota and bluefin inherit them automatically — do **not** add copies to those repos.
