@@ -1,80 +1,95 @@
-# bonedigger — QR code for reports
+---
+name: bonedigger-qrcode
+description: Use when designing or reviewing proposed terminal QR links for the ujust report flow.
+---
 
-Load when adding console QR output to `ujust report`: a way for a user on
-their phone to scan a code printed in the terminal and open the report so they
-can voice-dictate into it.
+# bonedigger — QR links (proposal)
 
-## Why
+**Not implemented in the pinned common client.** This guide specifies an optional
+phone handoff, not a shipped reporting feature. Bonedigger owns this contract;
+implementation belongs in `projectbluefin/common`'s `bonedigger-report`, not its
+`60-bonedigger.just` entry-point wrapper.
 
-The report flow ends with the user staring at a terminal. This feature lets the
-same user pick up their phone, scan a QR code, and open the issue form (or their
-uploaded gist) in a mobile browser — where voice dictation is far easier than
-typing a bug report on a phone keyboard.
+## When to Use
 
-Issue: projectbluefin/bonedigger#10 "QR codes for stuff".
+- Designing terminal QR output for opening a report on another device.
+- Reviewing URL payload privacy, rendering fallbacks, or scan verification.
 
-## What the QR encodes
+## When NOT to Use
 
-Two QR opportunities in the existing upload flow — neither carries PII:
+- Describing current QR support or adding a required upload step.
+- Moving diagnostics into QR payloads or duplicating image-routing logic.
 
-1. **Pre-upload — issue form.** Encodes the canonical issue-report URL for the
-   image's tracker (`BONEDIGGER_ISSUE_URL`, or derived from `BUG_REPORT_URL` in
-   `/etc/os-release`). Opening it on a phone presents the bug-report form the
-   user can voice-dictate into. Optionally append `?body=` with a short prompt so
-   the first field is pre-seeded; keep the seeded body free of PII.
-2. **Post-upload — gist.** After `gh gist create --public`, print a second QR
-   encoding the public gist URL so the user can open their uploaded report on any
-   device.
+## Core Process
 
-Because both values are URLs, the QR payload contains no diagnostic data and no
-PII — consistent with the on-device scrubbing model.
+1. **Use the actual reporting hooks.** `start_bug_report()` resolves `BUG_REPO`
+   through `route_issue_repo()` and the shared `ublue-image-repo` helper.
+   `submit_draft()` calls `preview_draft()` to review `$DRAFT_DIR/issue.md` and
+   selected profile files (a `gum pager` on a terminal, plain output otherwise),
+   then requests publication consent. `publish_smart_logs()` publishes only
+   selected profile files to a public gist, if any. `create_issue()` creates the
+   issue directly through GitHub CLI/API using `issue.md`; the returned issue URL
+   is printed and optionally opened by `offer_browser()`.
+2. **Proposed pre-submission handoff:** after draft preview and before publication
+   consent, optionally show `https://github.com/${BUG_REPO}/issues/new` for bug
+   reports. Feature requests use `projectbluefin/common`. For resumed drafts,
+   use the persisted `repo.txt`, not a newly inferred machine route. This opens a
+   separate manual form: it does not transfer or submit the local draft. Explain
+   this to avoid duplicate reports. Do not seed query parameters with report
+   bodies or diagnostic data. There is no existing `BONEDIGGER_ISSUE_URL` knob.
+3. **Proposed post-publication handoff:** show a gist QR only when
+   `publish_smart_logs()` has produced or reused `gist-url.txt` for selected
+   profiles. With no profiles there is no gist and no gist QR. After successful
+   `create_issue()`, the returned issue URL is the primary report handoff.
+4. **Encode only the intended URL**, never logs, identifiers, tokens, report
+   content, or personal query parameters. A URL can still disclose its destination
+   and public report identifier; URL-only is not a promise of anonymity. QR output
+   must not bypass preview, authentication, or publication consent.
+5. **Render as an optional enhancement.** A proposed `print_qrcode <url>` helper
+   can use `qrencode -t ANSIUTF8 -m 4 -o - "$url"`. Upstream supports `ANSIUTF8`,
+   `-m` for margins, and `-o -` for stdout. `-s` specifies dots/pixels; do not
+   assume it scales terminal UTF-8 output. Verify terminal readability and scans
+   with the actual backend. Always print a labeled plain URL for accessibility,
+   unsupported terminals, and users without a camera. If `qrencode` is absent or
+   fails, keep the plain URL and continue reporting; no mandatory generator or
+   new reporting dependency is required.
+6. **Require round-trip proof before shipping.** Decode the rendered symbol and
+   compare the decoded bytes with the exact input URL. Use an image representation
+   of the same symbol and an optional decoder such as `zbarimg`; ANSI terminal
+   escape text is not an image that can simply be piped into an image decoder.
+   Also scan the actual terminal rendering on a phone.
 
-## Where it fits in the flow
+### Existing versus proposed dependencies and knobs
 
-Current flow (see `bonedigger-ujust.md`):
+The existing flow uses `gum` for review/consent and `gh` for publication; the
+wrapper supplies brand/version. Routing comes from `BUG_REPO`, not a new URL
+override. `qrencode` and a verification decoder are **proposed optional** tools,
+not verified image-installed dependencies. This proposal requires no new
+environment variable, clipboard integration, or upload mechanism.
 
-1. render summary via `glow` + `gum pager` for local review
-2. confirm upload with `gum confirm`
-3. auth check → gist upload / clipboard
-4. `gum choose` file-a-bug / request-feature / skip
+## Common Rationalizations
 
-Add the QR at these points:
+- “Every report has a gist.” Only selected smart logs create one.
+- “A QR is consent to publish.” It is navigation, not consent.
+- “The encoder succeeded, so the terminal QR works.” Exact decoding and an actual
+  terminal scan are required.
 
-- **After step 1 (summary rendered), before step 2.** Show the issue-form QR so
-  the user can open the form on their phone while they decide whether to upload.
-- **After step 3 gist succeeds.** Show the gist QR as the final confirmation the
-  report is shareable from any device.
+## Red Flags
 
-The recipe (`system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just` in
-`projectbluefin/common`) is image content and lives in `common`, not here. This
-doc is the specification; the implementation belongs in `common`.
+- QR payloads containing report text, credentials, or identifying query values.
+- A pre-submission form portrayed as the directly created report.
+- Missing plain URLs, mandatory QR tools, or a gist QR when no gist exists.
 
-## Rendering
+## Verification
 
-- **Primary: `qrencode` CLI.** `qrencode -t ANSIUTF8 -s <size> -m 4 "<url>"`
-  prints a scan-friendly UTF-8 block. The `qrencode` package ships on Fedora /
-  Bluefin. Use `-m 4` for a wide quiet zone and `-s` (module size) large enough to
-  scan from arm's length — terminals are viewed close, phones scan from a
-  distance.
-- **Fallback: bundled pure-bash generator.** If `qrencode` is absent, fall back
-  to a dependency-free bash QR generator so the feature works on minimal installs.
-  Do not require a new system dependency for a core reporting step.
+For a future implementation, exercise no-profile and selected-profile reports,
+resumed drafts, declined publication, gist/issue failures, missing renderer, and
+non-terminal output. Confirm only real successful URLs are offered, reporting
+continues without QR tools, and both exact decoding and phone scans succeed.
+These are acceptance requirements, not evidence of shipped QR support.
 
-Wrap rendering in a helper (`print_qrcode <url>`) so the terminal backend is a
-single choke point — both flow points call it, and the primary/fallback choice
-lives in one place.
+## Sources
 
-## Guard / self-check
-
-The QR helper must round-trip: the bytes it prints must decode back to the input
-URL. Verify with a tiny self-check — pipe the helper output through a QR decoder
-(e.g. `zbarimg --raw -` if present, or the fallback's own decoder) and assert the
-decoded text equals the input URL. Add this as a `--selftest` on the helper or a
-one-line check in the recipe's test harness.
-
-## Dependencies
-
-- `qrencode` (primary renderer; available on Bluefin)
-- `zbarimg` (optional; only for the round-trip self-check)
-
-No new env vars. Reuse `BONEDIGGER_ISSUE_URL` / `BUG_REPORT_URL`.
+- [Pinned common client](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/bluefin/usr/libexec/bonedigger-report): `preview_draft`, `submit_draft`, `publish_smart_logs`, `create_issue`, `route_issue_repo`.
+- [Pinned wrapper](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just) and [routing helper](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/shared/usr/libexec/ublue-image-repo).
+- [Official qrencode CLI source/help](https://github.com/fukuchi/libqrencode/blob/master/qrenc.c): `ANSIUTF8`, margin, size, and stdout options. Context7 library `/websites/fukuchi_works_qrencode` had no matching CLI documentation; upstream source is the fallback authority.

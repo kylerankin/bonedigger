@@ -1,196 +1,178 @@
 ---
 name: bonedigger-screenshots
-description: Use when adding screenshot capture, on-device screenshot analysis, or screenshot privacy rules to the `ujust report` diagnostics flow.
+description: Use when designing or reviewing proposed screenshot capture, local OCR, or screenshot privacy rules for ujust report.
 ---
-# bonedigger — screenshot capture & analysis
+
+# bonedigger — screenshot analysis (proposal)
+
+**Not implemented in the pinned common client.** This optional enhancement would
+extract useful text from screenshots or phone photos of a display. Bonedigger
+owns the privacy contract; executable capture/OCR belongs in
+`projectbluefin/common`'s `bonedigger-report`. The `60-bonedigger.just` wrapper
+only invokes that client with brand/version; do not put analysis there or edit
+downstream template copies.
 
 ## When to Use
 
-- Extending `ujust report` to capture or analyze a screenshot / screen photo
-- Adding privacy rules for image data in the report pipeline
-- Deciding what screenshot-related fields go in the canonical issue templates
-- Answering the question behind issue #2 ("Analyze screenshots?")
+- Designing local screenshot/OCR input for a bug report.
+- Reviewing consent, asynchronous portal capture, cleanup, and draft ordering.
+- Handling phone photos when login screens, TTYs, crashes, or display faults
+  prevent normal capture.
 
 ## When NOT to Use
 
-- Editing `ujust report`, OTel config, or other image content — that belongs in `projectbluefin/common`
-- Editing downstream template copies directly in `common`, `dakota`, `bluefin`, `bluefin-lts`, or `knuckle`
-- Building a server-side image-analysis service — bonedigger has no backend; everything runs on the user's machine
+- Claiming screenshot capture is currently available.
+- Building a remote image-analysis service or uploading raw images.
+- Requiring screenshots or a gist to submit an otherwise valid report.
 
-## The Problem (issue #2)
+## Core Process
 
-Some bugs cannot be captured with a normal screenshot:
+1. **Obtain explicit, reversible consent first.** Disclose local analysis, the
+   extracted text to be included, and that no image will be uploaded. Use an
+   explicit `gum confirm` before capture, reading a supplied image, or analysis.
+   Decline or withdrawal skips only this enhancement. Portal permission is not a
+   substitute for report consent. There is no current remembered-consent system.
+2. **Acquire an image locally.** Prefer the desktop Screenshot portal; optionally
+   offer a `gum file` picker for a user-supplied image. Missing portal/backend,
+   dismissed dialogs, or capture errors skip capture silently and leave normal
+   reporting available. Never mutate or delete the user's original input file.
+3. **Classify conservatively, if optional local tools exist.** Candidate labels
+   are `clean-screenshot`, `photo-of-screen`, `unusable`, and `unknown`.
+   Pillow/numpy sharpness, aspect/edge-angle, and phone-overlay heuristics are
+   best-effort only: calibrate thresholds against real images before trusting
+   them; full perspective estimation is outside this proposal. Missing tools
+   mean `unknown`, with disclosure. Warn on phone photos and offer re-capture.
+   For `unusable`, offer re-capture; if declined or still unusable, discard this
+   step's intermediates and text and continue the report, never abort it.
+4. **Extract text locally with optional `tesseract`.** If unavailable or failing,
+   explain that OCR was skipped and continue without screenshot context. Do not
+   substitute a Flatpak app, generic app finder, or network OCR service. Pass OCR
+   text through `scrub_journal_log()` (which includes `scrub_kernel_log()`) before
+   adding a "Screenshot context" section to `$DRAFT_DIR/issue.md`. Existing
+   regexes cover certain addresses, emails, home paths, UUIDs and serial patterns;
+   they do not reliably remove secrets, names, window titles, filenames, or
+   arbitrary chat/terminal contents. Scrubbing is not a completeness guarantee.
+5. **Keep classification advisory.** Optional `error-dialog`, `blank-screen`,
+   `visual-glitch`, `color-issue`, or `unknown` labels must be marked heuristic,
+   low-confidence where appropriate, and never diagnostic or a replacement for
+   the user's description. Do not infer blank screens or tearing conclusively
+   from poor photos or absent OCR text.
+6. **Finish before user review and publication.** The existing `submit_draft()`
+   invokes `preview_draft()` on `issue.md` and selected profile files, then asks
+   for public submission consent. Put capture, classification, OCR, scrubbing,
+   and image cleanup before that review. If OCR text is added after any preview,
+   preview again before consent. Review uses `gum pager` on a terminal and plain
+   output otherwise; allow correction/removal of sensitive OCR text before
+   submission. Only scrubbed, reviewed text may persist, never pixels.
+7. **Use the actual submission path.** `BUG_REPO` is resolved by the shared
+   routing helper and saved as `repo.txt`; `create_issue()` creates the public
+   issue directly via `gh issue create` using `issue.md`. `publish_smart_logs()`
+   creates a public gist only for selected smart-log profile files; it does not
+   upload `issue.md` or images. A gist is optional, not the primary or required
+   report. Resume runs `load_draft()` then `submit_draft()`; do not reacquire an
+   image or presume fresh consent on resume. Any new acquisition needs a new
+   explicit consent prompt and review.
 
-- The bug is in the login / lock screen, KMS, or a TTY — Wayland and most screenshot tools are unavailable.
-- The system crashed or hung before the user could capture anything.
-- The display is external, high-DPI, or multi-monitor, and screenshot tools mis-capture.
+### Asynchronous portal requirements
 
-In those cases the user photographs the monitor with a phone. The result is angled, glare-ridden, and full of context a maintainer needs (exact error text, dialog contents, visual glitches) but cannot reliably read. Maintainers get a photo and still have to ask follow-up questions.
+`org.freedesktop.portal.Screenshot.Screenshot(parent_window, options)` returns a
+Request object path, **not an image**. The URI arrives in
+`org.freedesktop.portal.Request::Response` on that request.
 
-The opportunity: `ujust report` can turn that poor input into structured, useful signal — **on the user's machine, before anything leaves the box**.
+- Prefer a single-connection helper (optional Python plus Gio or a D-Bus binding).
+  Subscribe before calling; use a unique, unguessable `handle_token` and
+  `interactive=true` (a customization hint, not a consent guarantee). The
+  predictable request path uses that connection's unique bus name. Verify the
+  returned handle and adjust the subscription if it differs.
+- A separate `gdbus monitor` / `gdbus call` pair cannot predict the caller's bus
+  name from the monitor connection. If using that approach, listen before the
+  call, buffer Response signals, then match the returned request path exactly;
+  never accept an unrelated request or busy-poll a guessed image pathname.
+- Use a bounded wait (60 seconds is a proposed default) and explicit cancel/abort
+  handling. Response `0` means success; `1` is cancellation; `2` is another
+  termination/error. Non-success skips the screenshot step silently. On timeout
+  or abort, call `Request.Close` where possible, stop listeners, and clean up;
+  `Close` emits no Response, so do not wait for one afterwards.
+- Validate success results and resolve the returned URI as a local file using
+  proper URI decoding, not simple `file://` string stripping. Copy portal output
+  into private scratch, then delete the portal-produced image immediately.
+  A backend that cannot satisfy image cleanup must not enable this enhancement.
 
-## Design Goals
+### Privacy and cleanup requirements
 
-1. **On-device, always.** A screenshot is the one data type that inherently contains PII — open documents, browser tabs, chat windows, personal files. Nothing about the screenshot may leave the machine raw. Any analysis, OCR, and PII scrubbing happen locally.
-2. **Supplement, don't replace.** The gist URL from the normal flow is still primary. The screenshot path is an optional enhancement for users who cannot produce a clean capture.
-3. **Extract text, not pixels.** The highest-value, lowest-privacy-risk output is extracted and scrubbed *text* (error messages, dialog labels, version strings from the image), not the image itself.
-4. **Tell the user what happened.** If the provided image is a photo-of-screen, warn the user and offer to re-capture; never silently ingest a blurry phone photo as if it were clean.
+**No raw image upload anywhere:** no gist, issue attachment, external analysis,
+telemetry, or retained draft pixels. OCR, geometry checks, and classification
+remain local. Optional dependencies must never make reporting fail.
 
-## What `ujust report` Collects
+The existing client deliberately preserves drafts under
+`${XDG_STATE_HOME:-$HOME/.local/state}/ujust-report/drafts` through `keep_draft()`
+and `--resume`, and saves a local `last` copy after submission. It has no existing
+image cleanup mechanism or EXIT trap. Never store images in `$DRAFT_DIR` or the
+local report copy.
 
-Add an optional step, gated on user consent (`gum confirm`), after the normal diagnostics capture:
+Use a private `mktemp -d` scratch directory under `$XDG_RUNTIME_DIR` for copied
+inputs and every crop/downscale/OCR image intermediate. If safe runtime scratch
+is unavailable, skip the enhancement, not the report. Delete all owned image
+intermediates **before the step returns on every path**: success, declined or
+withdrawn consent, unusable-skip, acquisition/OCR failure, timeout, and abort.
+Use function-scoped cleanup plus interrupt handling; do not defer cleanup until
+process exit. Delete portal-produced output immediately after copying. Cleanup
+must stop/cancel asynchronous work so a late result cannot recreate an orphan
+image. Do not promise synchronous cleanup after an uncatchable kill or power
+loss; runtime scratch limits persistence but does not replace return-path cleanup.
+Withdrawal must remove this step's OCR additions as well as owned images; only
+scrubbed text the user still consents to include may remain in a resumable draft.
 
-| Field | Source | Notes |
-|-------|--------|-------|
-| Clean screenshot (if capturable) | xdg-desktop-portal `org.freedesktop.portal.Screenshot` | One mechanism on both desktops: GNOME (Bluefin) and KDE (Aurora) each back the portal with their own shell capture. The call is **asynchronous** — see below. Skip silently if the portal call fails, no portal is running, or the user dismisses the portal dialog |
-| User-provided image (photo-of-screen) | `gum file` picker or drag-drop | Any image file the user supplies |
-| Screenshot type | On-device analysis | `clean-screenshot` / `photo-of-screen` / `unusable` / `unknown` (detection unavailable — see below) |
-| Extracted text | On-device OCR | See below; folded into the draft's `issue.md`, never uploaded raw |
-| Problem classification | On-device heuristic | `error-dialog` / `blank-screen` / `visual-glitch` / `color-issue` / `unknown` |
+### Existing versus proposed knobs and dependencies
 
-### Portal capture is asynchronous
+Existing client knobs include `IMAGE_INFO_FILE`, `BONEDIGGER_BRAND`, state paths,
+and `UBLUE_IMAGE_REPO_BIN`; `BUG_REPO` is routing state, not a consent setting.
+There is no existing `BONEDIGGER_ISSUE_URL` or screenshot knob.
 
-`org.freedesktop.portal.Screenshot.Screenshot()` does **not** return the image. It returns a `Request` object path, then shows an interactive portal dialog; the file URI arrives later in the `org.freedesktop.portal.Request::Response` signal on that path. A bare `gdbus call` therefore yields an object path and no image — the recipe must wait for the signal.
+The proposed **new** `BONEDIGGER_SCREENSHOT` accepts `ask` (default) or `never`;
+unrecognized values mean `ask`. There is deliberately no automatic "yes" or
+remembered consent: environment settings can be applied without user awareness.
 
-Required shape:
+New optional tools would be Python with Gio/D-Bus bindings for capture,
+`python3-pillow`/`python3-numpy` for heuristics, and `tesseract` for OCR. The pinned
+client uses none of these for screenshots. Missing capture tools permits a
+consented file-picker path; missing heuristics yields `unknown`; missing OCR
+omits extracted context. No new template field is required by this proposal;
+any future canonical field must be optional and text-only, with no raw-image
+invitation or required gist.
 
-1. Start listening **before** calling, so the response cannot be missed in the race window. Note that the `Request` path cannot be precomputed in a two-process shell form: it is derived from the *calling* connection's unique bus name, and with a separate `gdbus monitor` / `gdbus call` pair the caller is the short-lived `gdbus call` process whose `:1.NNN` name is unknown until it connects. So the monitor must be unfiltered — `gdbus monitor --session --dest org.freedesktop.portal.Desktop` (or a `dbus-monitor` / `busctl monitor` equivalent) watching **all** `org.freedesktop.portal.Request::Response` signals — and the correct one is selected afterwards by matching the object path against the one `Screenshot()` returned. Precomputing the path is only possible when the call and the signal subscription share one D-Bus connection, i.e. in the single-connection helper below.
-2. Call `Screenshot()` with `handle_token` and `interactive` options, and keep the `Request` object path it returns.
-3. Wait for a `Response(u response, a{sv} results)` whose object path equals that returned path, with a timeout (the dialog is user-driven — 60s is reasonable) and a cancel path.
-4. `response == 0` ⇒ success, take `results['uri']` (a `file://` URI) and strip the scheme. `response == 1` ⇒ user cancelled, `2` ⇒ other error — in both cases skip the screenshot step silently and continue the report.
+## Common Rationalizations
 
-Because the unfiltered-monitor form is noisy and easy to get wrong, the **preferred** shape is a short single-connection `python3` + `Gio` (or `dbus`) helper: it calls `Screenshot()` and subscribes to `Response` on the same connection, so it can precompute or directly match the `Request` path without parsing monitor output. `python3` is **not** currently used by `bonedigger-report` — this spec introduces it as a new optional dependency (see "Dependencies this spec adds"). Do not busy-poll a guessed output path.
+- “The portal dialog or environment variable already gave consent.” Neither
+  replaces explicit disclosure and consent for this analysis/submission.
+- “The scrubber catches everything.” Arbitrary OCR text needs human review.
+- “The draft is temporary.” Cancelled/failed drafts intentionally survive resume.
+- “Cleanup at process exit is enough.” Images must be gone before each return.
 
-The portal writes its image somewhere of its own choosing, outside any bonedigger directory. Copy it into the ephemeral image scratch dir defined in "Privacy Model" and delete the portal-produced file immediately — never into the draft directory.
+## Red Flags
 
-### Photo-of-screen detection
-
-Cheap, local heuristics before committing to OCR. These are pixel operations and need an image library — the recipe may use `python3` with `python3-pillow` and `python3-numpy`. None of the three is used by `bonedigger-report` today; all are **new** optional dependencies this spec introduces (all are Fedora RPMs) and must be added to the dependency list as optional. No OpenCV, no network service. **If those modules are absent, skip detection entirely**, classify the image as `unknown`, tell the user, and continue — detection is an enhancement, never a hard requirement.
-
-- **Sharpness** — Laplacian variance of a cropped region; low variance ⇒ likely out-of-focus phone photo. Thresholds are TBD and must be tuned against real submissions before the heuristic is trusted.
-- **Aspect / geometry** — Non-standard aspect ratio ⇒ likely a photo. Full perspective-distortion estimation is out of scope for a Pillow/numpy implementation; aspect ratio and edge-angle sanity checks only.
-- **Phone UI overlays** — Status-bar clock / battery / notch regions ⇒ photo. Best-effort, low confidence.
-
-If the image is classified `unusable`, warn the user and offer to re-capture. Only the screenshot step is affected — never abort the report. If the user declines to re-capture, or the replacement is also `unusable`, skip the screenshot step entirely (no image, no OCR text, delete the intermediates per "Privacy Model") and continue the normal report flow. Do not upload garbage. If `photo-of-screen`, warn the user and prefer extracted text. The image itself is never attached in any case — see "No raw image upload".
-
-### On-device OCR and extraction
-
-- Use the `tesseract` RPM as the on-device OCR engine — it is the only *OCR* engine this spec sanctions (the Pillow/numpy dependency above is for pixel heuristics, not OCR). There is no Flatpak OCR engine to fall back to: do not substitute a Flathub app, do not add a network OCR API, and do not rely on a generic "app finder" as the OCR engine. If `tesseract` is absent, skip the OCR step and say so.
-- Extract text, then run it through the **same** `scrub_*` pipeline used for journal logs (`scrub_kernel_log()` + general scrubbing): IPs, MACs, emails, home paths, UUIDs, serials. OCR output is text and is subject to the same PII rules.
-- Attach extracted text to the draft's `issue.md` under a "Screenshot context" section. The gist is text-only, so only scrubbed extracted text is attached here — not the image (see "No raw image upload").
-
-### Problem classification
-
-Lightweight, heuristic, and clearly labeled as *not diagnostic*:
-
-- Error-dialog keywords (`error`, `failed`, `cannot`, `unable`, `cannot open`, `no response`, window title `×` buttons) ⇒ `error-dialog`.
-- Near-uniform dark/gray region with no text ⇒ `blank-screen`.
-- Detecting repeated/tearing patterns is unreliable on a phone photo — classify conservatively and flag low confidence.
-
-Classification is advisory only; it never suppresses or overrides the user's own "What happened?" description.
-
-## Dependencies this spec adds
-
-None of these are used by `bonedigger-report` today; every one is **new** and **optional**. Missing any of them degrades the screenshot step, never the report:
-
-| Dependency | Used for | If absent |
-|------------|----------|-----------|
-| `python3` | Single-connection portal helper (`Gio`/`dbus`) and the pixel heuristics | Skip portal capture; fall back to the `gum file` picker. Skip detection, classify `unknown` |
-| `python3-pillow`, `python3-numpy` | Sharpness / aspect / overlay heuristics | Skip detection, classify `unknown`, tell the user |
-| `tesseract` | On-device OCR | Skip the OCR step and say so |
-
-The current dependency list in `bonedigger-ujust.md` ("Dependencies") is the baseline; add these as a clearly marked optional group when the feature lands.
-
-## Privacy Model
-
-Screenshots break the normal PII-scrubbing contract because the PII is *in the pixels*, not in structured fields. The rules:
-
-| Rule | Requirement |
-|------|-------------|
-| No raw image upload | A screenshot is never uploaded to a gist as-is. This is a hard gate, not a default. |
-| On-device analysis only | OCR, classification, and geometry checks run locally. No image is ever sent to an external service. |
-| Scrub extracted text | OCR text passes through the existing `scrub_*` functions before it lands in the draft's `issue.md` or is attached. `scrub_*` is regex-only and cannot catch window titles, filenames, or chat/terminal text — see "Integration With the Report Flow" for the mandatory user-review ordering. |
-| User consent + disclosure | The user is told the image will be analyzed locally and what will be attached. Consent is explicit (`gum confirm`) and reversible. There is no existing remembered-consent mechanism — today's overrides (`IMAGE_INFO_FILE`, `BONEDIGGER_ISSUE_URL`, `BONEDIGGER_BRAND`) are path/URL/brand knobs only. This spec introduces one new variable, `BONEDIGGER_SCREENSHOT` (`ask` (default) / `never`), to opt out of the prompt entirely. There is deliberately **no** value that pre-answers consent with "yes": an environment variable can be set fleet-wide (`profile.d`, a wrapper script) without the user noticing, and capture + OCR must never run unprompted. Any unrecognized value is treated as `ask`. |
-| Ephemeral intermediates | Image intermediates are **never** written into the draft directory. `bonedigger-report` creates its draft at `${XDG_STATE_HOME:-~/.local/state}/ujust-report/drafts/draft-XXXXXX` and deliberately **persists** it for `--resume` (`bonedigger-report:7,366,371-375`); there is no EXIT trap. Anything written there survives cancel, abort, and crash. So all image files — portal output, the user-supplied copy, and every cropped/downscaled derivative — live in a separate scratch dir created with `mktemp -d` under `${XDG_RUNTIME_DIR}` for the duration of the screenshot step only. |
-| Unconditional image deletion | **Every image intermediate is deleted before the screenshot step returns, on every path**: success, declined consent, `unusable`-skip, OCR failure, timeout, and abort. Requirements: (a) delete the portal-produced file as soon as it is copied into the scratch dir; (b) `rm -rf` the scratch dir in a function-local cleanup that runs on every return path — do not defer to process exit, because `bonedigger-report` has no exit trap and `keep_draft()`/`--resume` keep the draft around indefinitely; (c) never copy an image into `$DRAFT_DIR`, since `keep_draft()` preserves it verbatim for the user to resume. Only scrubbed OCR **text** may enter the draft. Withdrawn consent must leave no image on disk. |
-
-This keeps the screenshot path consistent with the rest of the repo: scrubbing happens on-device, before upload, and the user owns their data.
-
-## Integration With the Report Flow
-
-```
-diagnostics capture  →  draft issue.md + profile files rendered
-        │
-        ▼
-gum confirm "Attach a screenshot / photo?"
-        │  (no)  →  skip
-        ▼  (yes)
-classify image (clean vs photo-of-screen vs unusable)
-        │  unusable → warn, offer re-capture; if declined or still
-        │              unusable, skip screenshot step and continue report
-        ▼
-OCR on-device → scrub extracted text → fold into the draft's issue.md
-        │
-        ▼
-preview_draft() — gum pager review of issue.md   ← user sees OCR text here
-        │
-        ▼
-gum confirm upload
-        │
-        ▼
-upload (gh gist) issue.md + profile files → open issue
-```
-
-**Ordering is a privacy requirement, not a preference.** `bonedigger-report` renders the draft through `preview_draft()` (`bonedigger-report:420-428`, `gum pager` on `issue.md` and each profile file), and `submit_draft()` calls it before asking for upload consent. The whole screenshot step — capture, classification, OCR, scrub — must run **before** `preview_draft()`, so the extracted text is in the `issue.md` the user actually reads.
-
-`scrub_*` is regex-only (IPs, MACs, emails, home paths, UUIDs, serials). OCR pulls in window titles, filenames, and chat/terminal text that no regex catches, so the user's own eyes on the pager are the real mitigation. If an implementation cannot fold the screenshot step in before the first render, it must re-render and call `preview_draft()` again after OCR and before the upload confirmation. Uploading OCR text the user has not seen paged is a bug.
-
-## Template Changes
-
-`templates/bug-report.yml` gains an **optional** screenshot field so users who file manually (not via `ujust report`) can attach a capture:
-
-```yaml
-- type: textarea
-  id: screenshot
-  attributes:
-    label: "Screenshot (optional)"
-    description: "Optional — paste or drag a screenshot. If you had to photograph your screen, `ujust report` can extract and scrub the text for you."
-  validations:
-    required: false
-```
-
-Keep it optional and non-blocking. The gist URL remains the required field.
-
-## Where the Code Lives
-
-The implementation is **image content**, so it ships in `projectbluefin/common`, not here:
-
-| Artifact | Path in common |
-|----------|----------------|
-| Screenshot capture + OCR + scrub logic | `system_files/bluefin/usr/libexec/bonedigger-report` — the actual implementation: `scrub_kernel_log()` (line 142), `create_draft()` (362), `preview_draft()` (420), `submit_draft()` (~520) all live here |
-| Recipe entry point | `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just` — a 13-line wrapper that only exports `BONEDIGGER_VERSION`/`BONEDIGGER_BRAND` and execs `/usr/libexec/bonedigger-report`. Do **not** put capture, OCR, or scrub logic here |
-| Consent / override env var | same script — add `BONEDIGGER_SCREENSHOT` to the override table alongside `IMAGE_INFO_FILE` / `BONEDIGGER_BRAND` |
-| Screenshot template field | `templates/bug-report.yml` (mastered here, synced downstream) |
-
-This doc is the spec. The recipe and any new env vars live in `common`; Dakota and bluefin inherit the recipe automatically — do not add copies to those repos. **Sync workflows are the wrong answer** — edit the recipe directly in `common`.
+- Pixels in a draft, local report copy, gist, attachment, or network request.
+- OCR appended after preview without another review before publication consent.
+- Raw URI stripping, accepting unrelated Response signals, unbounded waits,
+  guessed output polling, or missing abort/late-result cleanup.
+- Auto-consent, deleting the user's source image, or treating missing tools as a
+  fatal report error.
 
 ## Verification
 
-- [ ] No raw screenshot is ever uploaded; on-device analysis is a hard gate.
-- [ ] OCR output passes through the existing `scrub_*` functions.
-- [ ] The screenshot/OCR step completes **before** `preview_draft()`, so no OCR text reaches the gist unreviewed.
-- [ ] The portal capture waits on the `Request::Response` signal and handles cancel/timeout.
-- [ ] Missing `tesseract` or `python3-pillow`/`python3-numpy` degrades gracefully instead of failing the report.
-- [ ] No image file is ever written into `$DRAFT_DIR`; image scratch lives in a `mktemp -d` dir under `$XDG_RUNTIME_DIR`.
-- [ ] Every image intermediate — including the portal-produced file — is deleted before the screenshot step returns on every path (success, declined consent, `unusable`-skip, timeout, abort), without relying on an exit trap.
-- [ ] A preserved draft (`keep_draft()` / `--resume`) contains only scrubbed OCR text, never pixels.
-- [ ] Consent is explicit and reversible; the user is told what is attached. No environment variable can pre-answer consent with "yes" — `BONEDIGGER_SCREENSHOT` only accepts `ask` / `never`.
-- [ ] An `unusable` image skips only the screenshot step (after warn + re-capture offer) and never aborts the report.
-- [ ] `pre-commit run --all-files` passes.
-- [ ] `actionlint .github/workflows/*.yml` passes (only if a workflow changes).
+For a future implementation, exercise successful portal capture and supplied
+photos; cancellation, timeout, abort and late Response; missing dependencies;
+unusable images with declined/failed re-capture; OCR errors; consent withdrawal;
+and resumed drafts. Inspect scratch, portal output, preserved drafts, local
+copies, and public submission payloads. Prove no owned images survive any return,
+no raw image leaves the machine, and only scrubbed text reviewed before consent
+reaches `issue.md`. Check both terminal and non-terminal preview paths and
+normal reporting with no screenshot and no selected profiles. These are acceptance
+requirements, not evidence of shipped screenshot support.
 
 ## Sources
 
-- Issue #2 — "Analyze screenshots?" (the brainstorm this spec answers)
-- `bonedigger-ujust.md` — the existing `ujust report` collection, scrubbing, and upload flow this extends
-- `bonedigger-overview.md` — the on-device, no-backend privacy model
+- [Pinned common client](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/bluefin/usr/libexec/bonedigger-report): `scrub_journal_log`, `create_draft`, `keep_draft`, `preview_draft`, `submit_draft`, `publish_smart_logs`, `create_issue`.
+- [Pinned wrapper](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just).
+- [Official Screenshot API](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Screenshot.html): handle, options, URI result.
+- [Official Request API](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html): path convention, Response codes, Close semantics. Context7 `/flatpak/xdg-desktop-portal` confirmed the subscribe-before-call pattern via [requests.rst](https://github.com/flatpak/xdg-desktop-portal/blob/main/doc/requests.rst); official API pages supplied the Screenshot-specific details.

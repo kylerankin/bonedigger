@@ -1,225 +1,108 @@
-# bonedigger — ujust report tool
+---
+name: bonedigger-ujust
+description: Use when documenting, supporting, or changing the shipped ujust report client in projectbluefin/common, including smart logs, privacy review, confirmation comments, and resumable drafts.
+---
 
-Load when working on the client-side diagnostic reporting tool in `projectbluefin/common`: `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just`, `system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml`, or the OTel deep metrics capture.
+# Bonedigger — `ujust report`
 
-## Commands
+The executable client belongs to **projectbluefin/common**; Bonedigger owns reporting specifications, privacy contracts, canonical templates, and template sync. Hive owns issue lifecycle. This guide describes the pinned implementation in [Sources](#sources), not proposed capabilities.
+
+## When to Use
+
+- Help a user report a bug, request a feature, resume a draft, or add deployment evidence to an existing issue.
+- Check collection, consent, routing, or persistence claims against the shipped client before changing documentation.
+
+## When NOT to Use
+
+- Implement issue lifecycle automation here: that is Hive's responsibility.
+- Treat [QR codes](bonedigger-qrcode.md) or [screenshots](bonedigger-screenshots.md) as shipped functionality. Both are proposed specifications, not current report steps or installed dependencies.
+
+## Core Process
+
+### Report and review
 
 ```bash
-ujust report         # collect diagnostics, review locally, upload to gist, open issue
+ujust report
+ujust report --confirm https://github.com/projectbluefin/common/issues/123
+ujust report --resume "$HOME/.local/state/ujust-report/drafts/draft-XXXXXX"
 ```
 
-## What `ujust report` collects
+Use the actual preserved draft path, not the placeholder. `--confirm` and `--resume` are mutually exclusive.
 
-| Field | Source |
-|-------|--------|
-| Image name, tag, flavor, ref | `/usr/share/ublue-os/image-info.json` |
-| Booted image + digest | `bootc status --json` |
-| Staged image | `bootc status --json` |
-| Kernel version, architecture | `uname -r`, `uname -m` |
-| GNOME version | `gnome-shell --version` |
-| Active GNOME extensions | `gnome-extensions list --enabled` |
-| Installed Flatpaks | `flatpak list --columns=application,version` |
-| Load average | `/proc/loadavg` |
-| Memory usage | `free -h --si` |
-| Failed systemd units | `systemctl list-units --state=failed` |
-| Current boot kernel errors | `journalctl -b 0 -k -p err..emerg` (attached as `journal.txt`) |
-| Current boot system errors | `journalctl -b 0 -p err..emerg` (attached as `journal.txt`) |
-| Key service logs | `journalctl -b 0 -u <svc>` for gnome-shell, gdm, NetworkManager, bluetooth, rpm-ostree, systemd-coredump (attached as `journal.txt`) |
-| Groups (membership only) | `groups` (username redacted) |
-| GPU info | `nvidia-smi -q` (NVIDIA), DRM sysfs (AMD), `lspci` (all) |
-| Crash / panic detection | Previous boot end state, panic keywords, kernel errors, hardware fingerprint, crash artifact status |
-| Optional: deep hardware metrics | OpenTelemetry (35s sample) |
+1. Choose **Bug report**, **Feature request**, or **Get help**. Help prints the Bluefin Discussions URL without creating an issue; the confirmation menu item prints the `--confirm` usage.
+2. A bug requires a title, description, and reproduction steps, then offers any of the five smart-log profiles (including none). A feature requires a title and description, goes to `projectbluefin/common`, and collects no diagnostic baseline or profiles.
+3. Review `issue.md` and every selected profile: `gum pager` on an interactive terminal, plain output otherwise. Bug reports then ask for machine analysis (`3-clanker-queue`), human-only interaction (`3-human-queue`), or no queue preference. The choice is stored as a label and an HTML preference marker; it is not a lifecycle guarantee.
+4. Explicitly consent to the public issue and, when selected, public smart logs. Only selected profile files become a public gist; the baseline is the issue body, and **a gist is not required**. The client appends the gist URL and creates the issue directly through `gh issue create`.
+5. On success, the client attempts to save a local copy, removes the draft, prints the issue URL, and offers to open it in a browser on an interactive terminal.
 
-## PII scrubbing
+### Actual collection
 
-All scrubbing happens on-device before any upload. Nothing identifying leaves the machine raw.
+The bug baseline contains user description and reproduction text; image ref, tag, version, flavor, booted digest, kernel and architecture; up to 20 failed systemd unit names; and the last 40 current-boot journal errors (`err..emerg`). It does not collect a general hardware inventory.
 
-### General scrubbing (applied to all collected data)
+| Selectable profile | Collected evidence | File |
+| --- | --- | --- |
+| Desktop / graphics | Enabled GNOME extensions, graphics-controller `lspci` lines, last 200 current-boot GDM/GNOME Shell warnings through alerts | `desktop-graphics.md` |
+| Sleep / crash | Last 250 matching previous-boot kernel panic/oops/BUG/call-trace/sleep/resume/hung-task/lockup lines; last 50 coredump index entries from seven days | `sleep-crash.md` |
+| Update / boot | Text `bootc status`; last 250 current-boot warnings through alerts for bootc update, rpm-ostreed, and systemd boot-update services | `update-boot.md` |
+| Networking | Last 250 current-boot NetworkManager warnings through alerts; device/type/state from `nmcli` | `networking.md` |
+| Flatpak / application | Installed Flatpak application IDs and versions; last 250 current-boot Flatpak helper/portal warnings through alerts | `flatpak-application.md` |
 
-| Data | Scrubbed to |
-|------|-------------|
-| `/home/<username>/` paths | `/home/[REDACTED]/` |
-| `/var/home/<username>/` paths | `/var/home/[REDACTED]/` |
-| `groups` leading username | `[REDACTED] : group1 group2 ...` |
-| NVIDIA GPU UUID | `[REDACTED]` |
-| NVIDIA Serial Number | `[REDACTED]` |
-| NVIDIA PCIe Bus Id | `[REDACTED]` |
-| NVIDIA Minor Number | `[REDACTED]` |
-| `USER=`, `LOGNAME=` env vars in logs | `[REDACTED]` |
-| Email addresses in logs | `[REDACTED-email]` |
-| `machine-id` | Hashed to 8-char anonymous `HOST_ID` (SHA256, not reversible) |
-| `host.id`, `host.name`, `host.ip`, `host.mac` | Deleted by OTel resource/privacy processor |
-| `_MACHINE_ID`, `_BOOT_ID`, `_UID`, `_GID`, `_CMDLINE`, `_EXE`, `_COMM` | Deleted from journald log attributes |
-| `process.owner`, `process.command_line`, `process.executable.path` | Deleted by OTel processor |
+The sleep profile is a keyword excerpt, **not a boot-end classifier or proof of a crash**. No pstore or kdump artifacts are captured. Baseline content is capped at 60 KiB, with a 64 KiB cap after adding a gist link. Profiles are capped at 500 KiB each, reduced equally when needed to keep their combined allowance within 2 MiB. Truncation adds an omission marker.
 
-### Kernel log scrubbing — `scrub_kernel_log()` (applied to all kernel excerpts)
+### Privacy and consent
 
-Applied to every `journalctl -b -1 -k` excerpt. **Order matters** — MAC must run before IPv6 to get the right label.
+`scrub_kernel_log` matches MAC addresses before IPv6, IPv4/IPv6 patterns, UUID-shaped strings, `eui.`/`naa.`/`wwn.` hex identifiers, and home-directory path components. `scrub_journal_log` adds `USER=`/`LOGNAME=` assignments and email-pattern redaction. These filters cover collected failed-unit names and profile/log output, not every report field.
 
-| Data | Pattern | Scrubbed to |
-|------|---------|-------------|
-| MAC addresses | `([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}` | `[MAC-REDACTED]` |
-| IPv4 addresses | `\b([0-9]{1,3}\.){3}[0-9]{1,3}\b` | `[IP-REDACTED]` |
-| IPv6 full (≥4 groups) | `([0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{0,4}` | `[IP-REDACTED]` |
-| IPv6 compressed (`::`) | `[0-9a-fA-F]{0,4}(:[0-9a-fA-F]{0,4})*::[0-9a-fA-F:]+` | `[IP-REDACTED]` |
-| UUIDs / GUIDs | `[0-9a-fA-F]{8}-...-[0-9a-fA-F]{12}` | `[UUID-REDACTED]` |
-| Disk/NVMe serials | `(eui\|naa\|wwn\.)[0-9a-fA-F]+` | `[SERIAL-REDACTED]` |
-| Home paths | same as general scrubbing | `[REDACTED]` |
+**Review remains necessary.** Title, description, reproduction, branding, and image metadata are not passed through these scrubbers. Regex matching is not comprehensive PII removal: hostnames, secrets, unusual addresses/identifiers, and sensitive prose can remain. No general NVIDIA UUID/serial inventory scrubber exists. No machine-id hash or persistent client machine-identity tracker is created; the deployed image digest is build/deployment evidence, not an anonymous device ID. Public issues and public gists expose their contents and associate submission with the GitHub account. Decline submission if review reveals sensitive material; edit the preserved local files and resume.
 
-**IPv6 regex rationale:** The 4-group minimum (`{3,7}`) avoids false-positives on `HH:MM:SS` timestamps (only 3 groups). The `::` pattern is a separate pass to catch loopback (`::1`), link-local (`fe80::1`), etc.
+### Drafts and recovery
 
-**`Linux version` line is intentionally excluded** from the hardware fingerprint — it can contain build host strings (e.g. `builduser@buildhost`). Extract only `DMI: .* BIOS` lines.
+Drafts live under `${XDG_STATE_HOME:-$HOME/.local/state}/ujust-report/drafts/draft-XXXXXX`, not a runtime-directory report bundle. They store `issue.md`, `title.txt`, `repo.txt`, `queue-label.txt`, selected profile Markdown and `profile-files.txt`; bugs also have `bug-report.txt`, and a successful gist upload records `gist-url.txt`.
 
-## Crash / Panic Detection section
+Declined submission or queue selection, dependency/authentication failure, gist failure, and issue-creation failure preserve the draft. Resume loads its saved repository, title, body and existing listed profiles, previews again, and asks bug queue preference and publication consent again; it does not recollect diagnostics. An existing `gist-url.txt` reuses the previously published gist. If gist publication succeeded but issue creation failed, the gist is already public: cancelling later does not retract it.
 
-Implemented in `projectbluefin/common/system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just`. All data sourced from `journalctl -b -1` (previous boot). All kernel excerpts pass through `scrub_kernel_log()` before landing in `summary.md`.
+After successful issue creation, `persist_local_copy` replaces `${XDG_STATE_HOME:-$HOME/.local/state}/ujust-report/last/`: `issue.md` becomes `summary.md`, and other Markdown profiles are copied. It also copies `journal.txt` if present in a draft, although the current collector does not create it. A local-copy failure emits a warning; the submitted draft is still removed. The local `last` directory is a latest-copy convenience, not an archive.
 
-### Boot end-state classifier (4 buckets — never assume)
+### Confirmation is evidence, not resolution
 
-| Status | Condition |
-|--------|-----------|
-| `previous boot journal unavailable` | `journalctl -b -1` returns no output |
-| `clean shutdown` | Shutdown markers found in tail-200 of boot -1 full journal |
-| `suspend entered — no resume recorded before next boot` | Last `PM: suspend (entry\|exit)` line in boot -1 kernel log is `entry` |
-| `abrupt end — resumed from suspend, no clean shutdown recorded` | Last PM line is `exit` (resumed OK, then crashed) |
-| `abrupt end — no shutdown or suspend markers found` | Neither shutdown nor any PM markers present |
+`--confirm` accepts a positive issue number (using current image routing) or an HTTPS GitHub issue URL (using that URL's repository). It displays and posts an image ref/tag/version/digest, kernel, architecture, and up to ten failed units. It checks GitHub readiness; an interactive terminal also asks before posting. Noninteractive confirmation has no additional posting-consent prompt, so do not describe it as universally interactive.
 
-**Shutdown grep is scoped to `tail -200`** (not the full journal). Rationale: shutdown markers always appear at the end of a clean boot; streaming the full journal on the crash path (when no marker is found) can drain hundreds of thousands of lines with no progress indicator to the user.
+The comment records the exact deployed fingerprint **when available**; unavailable values can be `unknown`. It does not test reproduction, compare fix versions, prove a fix shipped, or close the issue. A human must connect this deployment evidence to observed behavior and the proposed fix.
 
-**Three PM buckets, not two.** A boot that resumed from suspend and then crashed must not be reported as "no suspend markers found" — it had suspend markers, just no clean shutdown after.
+### Routing and dependencies
 
-### Data collected (only when boot -1 is available)
+Image metadata starts at `IMAGE_INFO_FILE`. With `jq`, `read_boot_status` prefers the live booted ref from `bootc status --json`, falling back to `/run/ublue-os/booted-image` when no ref is available. It updates ref, tag (unless digest-pinned), and image name; version comes from `/etc/os-release`. The snapshot fallback supplies a ref, not a digest.
 
-| Sub-section | Command | Notes |
-|-------------|---------|-------|
-| Panic keyword scan | `journalctl -b -1 -k … \| grep -iE 'panic\|oops\|BUG:\|Call Trace\|RIP:\|…' \| tail -20` | `tail` not `head` — crash is at end |
-| Last kernel errors | `journalctl -b -1 -k -p err..emerg … \| tail -30` | |
-| Context window (last 30 kernel lines) | `journalctl -b -1 -k … \| tail -30` | Suppressed for clean shutdowns with no findings |
-| Hardware fingerprint | `grep -E 'DMI: .* BIOS' \| head -1` | DMI model + BIOS version only |
+`route_issue_repo` delegates to **`ublue-image-repo`**, not `BUG_REPORT_URL`: `bluefin-lts*` names route to `projectbluefin/bluefin-lts`; plain `bluefin` uses that repository for `lts*` tags and `projectbluefin/bluefin` otherwise. Other `bluefin*` names route to Bluefin, and `dakota*` names to `projectbluefin/dakota`, regardless of tag. Unrecognized names use Bluefin LTS for `lts*` tags, otherwise `projectbluefin/common`. Feature requests always route to common. Keep this grammar in the shared helper, not a second client lookup table.
 
-### Crash artifact status (always collected, independent of boot -1)
+The Bash client calls `gum` without installing it. Missing `gh` triggers an offer to install it with Homebrew; missing/failed Homebrew leaves the draft intact. Failed active authentication offers `gh auth login --web --skip-ssh-key`. Missing `jq` yields unknown image fields/digest; bootc failures yield unavailable status. Diagnostic commands generally tolerate unavailable commands or inaccessible logs with empty output: that is not evidence that the system is healthy. Browser opening uses `xdg-open`, falling back to printing the URL. No dependency is promised installed by this guide.
 
-| Artifact | How detected |
-|----------|-------------|
-| pstore | `mountpoint -q /sys/fs/pstore` + `find` file count; "empty" ≠ "no crash" — may have been cleared on boot |
-| kdump | `systemctl is-enabled/is-active kdump.service` (service status, not `/var/crash` directory) |
-| Userspace coredumps | `coredumpctl list --since "7 days ago" \| tail -10` (home paths scrubbed) |
+Actual environment inputs are `IMAGE_INFO_FILE`, `BONEDIGGER_BRAND`, `XDG_STATE_HOME`, `HOME`, and `UBLUE_IMAGE_REPO_BIN` (helper override); command lookup uses `PATH`. The wrapper exports `BONEDIGGER_VERSION`, but the client does not read it. There is no client `BONEDIGGER_ISSUE_URL` override.
 
-### `set -euo pipefail` safety rules
+## Common Rationalizations
 
-- Every `journalctl … | grep … | tail` pipeline ends with `|| true` inside `$()` — grep exits 1 on no match
-- Shutdown classification uses `if journalctl … | tail -200 | grep -qiE …` — safe in `if` conditions
-- `systemctl is-enabled kdump.service &>/dev/null` — safe in `if` condition
-- `${PSTORE_COUNT:-0}` — guards against empty find output
+- “Scrubbed means safe to publish.” Pattern filters are incomplete and do not scrub user-authored text; review every payload.
+- “Confirm means fixed.” A fingerprint comment is evidence for human verification, not a test result.
+- “Resume starts over.” It submits saved evidence and can reuse an already-public gist.
 
-## Optional deep hardware metrics (OTel)
+## Red Flags
 
-> **Known drift — do not implement from this section.** The sections below (OTel capture, the `glow` upload step, and the `$XDG_RUNTIME_DIR/ujust-report/report-XXXXXX/` + EXIT-trap output model) describe a retired design. The shipped `system_files/bluefin/usr/libexec/bonedigger-report` in `projectbluefin/common` has no OTel, no `python3`, no `glow`, and no EXIT trap; it writes drafts to `${XDG_STATE_HOME:-~/.local/state}/ujust-report/drafts/draft-XXXXXX` and deliberately preserves them for `--resume`. Read the script before relying on anything here.
+- Promising installed tools, automatic diagnosis, guaranteed anonymity, or mandatory gist upload.
+- Editing this repository to change executable client behavior, or copying the routing grammar out of the shared helper.
+- Publishing without preview and consent, or presenting proposal specs as shipped collection.
 
-Gated on `/usr/share/ublue-os/otel/ujust-report-config.yaml` existing in the image. If present, the user is offered a 35-second hardware telemetry capture. Outputs two spec-compliant OTLP NDJSON files (one signal type per file, per OTel spec):
+## Verification
 
-- `metrics.otlp.jsonl` — CPU, memory, disk, filesystem, network, paging, processes, Podman containers
-- `logs.otlp.jsonl` — journald service errors/warnings (gnome-shell, gdm, bluetooth, NetworkManager, systemd-coredump) + kernel dmesg (warning+)
+- [ ] Check the current `main`, `submit_draft`, `confirm_report`, collection, scrub, persistence, and routing functions before making behavior claims.
+- [ ] For client changes in common, exercise report-without-profiles, profile publication, declined consent, failed upload followed by resume, and confirmation using isolated fixtures and a nonpublishing GitHub CLI substitute.
+- [ ] Run the affected complete test file; never publish real diagnostics merely to verify documentation.
+- [ ] Verify Markdown links, keep proposals labelled, and run `pre-commit run --all-files` for changes here.
 
-The definitive OTel config lives in `projectbluefin/common/system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml`.
+## Sources
 
-**OTel collector config highlights:**
-- `memory_limiter` first (512 MiB limit) — OTel best practice
-- `batch` last before exporters — OTel best practice
-- `host.id` disabled (machine-id derived)
-- Process scraper: `command_line` and `executable.path` metrics disabled at source
-- Filesystem exclusion regexes use proper anchors (`^/proc(/|$)` not `/proc/*`)
-- `hostname_sources: [os]` — no DNS lookup
+Current implementation, pinned to common commit `cc6734876a6549340d2979d95771752d718f6f0f`:
 
-**Binary resolution order:**
-1. `$HOME/.local/bin/otelcol-contrib`
-2. `/usr/local/bin/otelcol-contrib`
-3. `$(command -v otelcol-contrib)`
-4. Fallback: `podman run docker.io/otel/opentelemetry-collector-contrib` (privileged, 45s timeout, no `--network=host`)
-
-**Podman fallback mounts:** `/proc`, `/sys`, `/var/log/journal`, `/run/log/journal`, substituted config, output dir, and the Podman socket (dynamic `id -u`).
-
-**Config path substitution** uses `python3` (not `sed`) to safely replace `/output/` with `$REPORT_DIR/` — handles `&` and `\` in paths.
-
-## Upload flow
-
-1. Show rendered report via `glow` + `gum pager` for local review
-2. **Print the issue-form QR code** so the user can open the form on their phone
-3. Confirm upload with `gum confirm`
-3. If `gh auth status --active` fails → copy to clipboard (wl-copy or xclip), show issue URL; `journal.txt` path shown separately
-4. If auth OK → `gh gist create --public` with `summary.md` + `journal.txt` (always) + `metrics.otlp.jsonl` + `logs.otlp.jsonl` (if OTel captured). **After a successful gist upload, print the gist URL as a QR code.**
-5. `gum choose` "File a bug report / Request a feature / Skip" — bugs route to the image's own tracker, feature requests always go to common
-
-## Environment variable overrides
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `IMAGE_INFO_FILE` | `/usr/share/ublue-os/image-info.json` | Image metadata path |
-| `BONEDIGGER_ISSUE_URL` | `https://github.com/projectbluefin/common/issues/new?template=bug-report.yml` | Issue URL base |
-| `BONEDIGGER_BRAND` | `🫐 Bluefin Bug Report` | Brand name shown in gum header |
-
-## Console QR codes (`ujust report`)
-
-After the summary renders, print a QR code so a user on their phone can scan it
-and open the report to voice-dictate into it. Full spec:
-[`bonedigger-qrcode.md`](bonedigger-qrcode.md).
-
-Two QRs, both URL-only (no PII):
-
-1. **Pre-upload** — right after the summary renders, before the upload confirm:
-   QR of the canonical issue-report URL (`BONEDIGGER_ISSUE_URL` / `BUG_REPORT_URL`)
-   so the form opens on the phone.
-2. **Post-upload** — after `gh gist create --public` succeeds: QR of the public
-   gist URL so the report opens on any device.
-
-Render with `qrencode -t ANSIUTF8 -s <size> -m 4 "<url>"` (primary), falling back
-to a bundled pure-bash generator when `qrencode` is absent. Wrap in a single
-`print_qrcode <url>` helper so the renderer is one choke point; the helper must
-round-trip (decoded output equals the input URL).
-
-## Dependencies
-
-- `gum` — TUI prompts and styling
-- `gh` — GitHub CLI for gist upload and auth check
-- `qrencode` — prints the console QR code (see above)
-- `bootc` — reads booted image status
-- `jq` — parses JSON from bootc and image-info
-- `gnome-shell`, `gnome-extensions`, `flatpak` — collects system info
-- `glow` (optional) — renders markdown in terminal
-- `wl-copy` / `xclip` (optional) — clipboard fallback when not authenticated
-- `otelcol-contrib` or `podman` (optional) — deep hardware metrics
-
-## Report output structure
-
-```
-$XDG_RUNTIME_DIR/ujust-report/report-XXXXXX/
-  summary.md           — Markdown report (always)
-  journal.txt          — Current boot system/service logs (always)
-  metrics.otlp.jsonl   — OTel host/container metrics (if OTel captured)
-  logs.otlp.jsonl      — OTel journald + kernel logs (if OTel captured)
-```
-
-Temp directory is cleaned up on EXIT trap. Use `trap - EXIT; exit 0` to preserve files when user cancels.
-
-## Consumer context (read before proposing design changes)
-
-- **Bluefin, Aurora, and Dakota all use GitHub as their backend.** They upload reports as GitHub Gists and file GitHub Issues. They do NOT use external paste services.
-- `BUG_REPORT_URL` in `/etc/os-release` is the canonical source for the distro's issue tracker — no env var needed for this.
-- If adding non-GitHub paste support (e.g. for Fedora, Debian, Ubuntu), use a small hardcoded lookup table keyed on the `BUG_REPORT_URL` domain. Do not add custom `os-release` fields or new env vars for this.
-
-## Where the code lives — do not get this wrong
-
-The recipe and OTel config are **image content**, not CI tooling. They live in `projectbluefin/common`:
-
-| File | Path in common |
-|------|----------------|
-| `ujust report` recipe | `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just` |
-| OTel collector config | `system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml` |
-
-`common` ships both files to every image via `common.bst`. Dakota and bluefin inherit them automatically — do **not** add copies to those repos.
-
-**Sync workflows are the wrong answer.** If you find yourself creating a workflow to copy these files from bonedigger to common (or anywhere else), stop: the file is in the wrong repo. Edit it directly in common.
-
-## Related
-
-- [`bonedigger-screenshots`](bonedigger-screenshots.md) — how `ujust report` can capture and analyze a screenshot / screen photo on-device (the extension to this flow for users who can't take a clean screenshot).
+- [Reporting client](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/bluefin/usr/libexec/bonedigger-report): `main`, `collect_baseline`, `profile_*`, `scrub_*`, `submit_draft`, `confirm_report`, `persist_local_copy`.
+- [ujust wrapper](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just).
+- [Canonical routing helper](https://github.com/projectbluefin/common/blob/cc6734876a6549340d2979d95771752d718f6f0f/system_files/shared/usr/libexec/ublue-image-repo).
+- GitHub CLI manual, verified through Context7 `/websites/cli_github_manual`: [issue creation](https://cli.github.com/manual/gh_issue_create), [issue comments](https://cli.github.com/manual/gh_issue_comment), [gist creation](https://cli.github.com/manual/gh_gist_create). These describe CLI semantics, not additional Bonedigger capabilities.

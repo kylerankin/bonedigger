@@ -1,54 +1,74 @@
 # bonedigger 🦴
 
-> Client-side diagnostic reporting frameworks (`ujust report`) and canonical intake templates for Project Bluefin.
+> Shared bug-reporting specifications, privacy contracts, and canonical intake templates for Project Bluefin.
 
 ## Current scope
 
-Bonedigger defines the client-side diagnostic reporting frameworks (`ujust report`), PII scrubbing standards, and canonical GitHub issue templates for Project Bluefin. Issue triage, labeling, and queue lifecycle are Hive-managed.
+| Responsibility | Owner |
+|----------------|-------|
+| Reporting specifications, privacy requirements, and proposed extensions | bonedigger — `docs/skills/` |
+| Canonical issue forms and template-sync workflow | bonedigger — `templates/` and `.github/workflows/sync-templates.yml` |
+| Executable `ujust report` client and image packaging | [projectbluefin/common](https://github.com/projectbluefin/common) |
+| Issue triage, labels, assignments, and queue lifecycle | Hive |
 
-**bonedigger handles:**
-- Specifications and architecture for the `ujust report` diagnostic tool
-- Canonical GitHub issue templates (`templates/`) synced to factory repos
-- Privacy models and PII scrubbing standards for bug reporting
+Bonedigger does not ship a lifecycle workflow or composite action. QR output and
+screenshot analysis are proposals, not features of the shipped reporting client.
+
 ## How it works
 
-```
-USER'S MACHINE                    GITHUB
-─────────────────                 ─────────────────────────────────────────
-ujust report                      GitHub Issues + Hive
-  └─ collects diagnostics           └─ intake structured issue reports
-  └─ PII scrub on-device            └─ issue lifecycle managed by Hive
-  └─ user reviews locally
-  └─ uploads to user's gist
-  └─ opens issue w/ gist link
+```text
+User's machine: ujust report (shipped by common)
+  → collect baseline diagnostics and optional smart-log profiles
+  → scrub system logs locally and preview the report
+  → obtain submission consent
+  → publish selected smart logs to the user's gist, if any
+  → create the issue directly through GitHub CLI
+GitHub Issues: Hive manages triage and lifecycle
 ```
 
-GitHub Issues is the only backend. No central server. The user owns their diagnostic data.
+A gist is optional. The client does not open or prefill a GitHub issue form.
+GitHub Issues is the only state backend; there is no central diagnostic server.
 
 ## Usage
 
 ### As a user
 
-Run on your Bluefin machine:
+Run on an image that ships the reporting client:
+
 ```bash
-ujust report       # collect diagnostics and open an issue
+ujust report                     # collect, review, and submit a report
+ujust report --confirm 42        # post the deployed system's fingerprint
+ujust report --resume /path/to/draft  # resume a preserved report draft
 ```
+
+`--confirm` also accepts a GitHub issue URL. A fingerprint is evidence for
+triage; it does not by itself assert that the issue is fixed.
 
 ### Downstream repos
 
-Issue templates in `templates/` are automatically synced to downstream repos via `.github/workflows/sync-templates.yml`.
+The sync workflow is triggered by changes under `templates/` pushed to `main`.
+It opens downstream PRs; templates are not deployed until those PRs are merged.
+See the [template guide](docs/skills/bonedigger-templates.md) for the declared
+consumer roster, authentication, and delivery verification. Do not equate the
+configured workflow with a successful synchronization.
 
 ## Repository structure
 
-- `templates/` — canonical GitHub issue templates (synced to all org repos)
-- `.github/workflows/sync-templates.yml` — auto-syncs templates to downstream repos
-- `docs/skills/` — agent skill docs
+- `templates/` — canonical issue forms and chooser configuration
+- `.github/workflows/sync-templates.yml` — downstream template PR automation
+- `docs/skills/` — architecture, current client behavior, and proposed extensions
+- [AGENTS.md](AGENTS.md) — ownership boundaries and contribution verification
 
 ## Privacy
 
-- All PII scrubbing happens on the user's machine before any upload
-- Diagnostic gists belong to the user under their own GitHub account
-- No central server, no telemetry infrastructure required
+- System-log redaction happens locally before submission; users review the result.
+- Regex scrubbing is not a guarantee that all identifying information is removed.
+- Issues and selected smart-log gists are public and created under the user's account.
+- The current client does not derive an identifier from `machine-id`, capture OTel
+  telemetry, or upload screenshots.
+
+Start with the [overview](docs/skills/bonedigger-overview.md) and the
+[client guide](docs/skills/bonedigger-ujust.md) for the actual implementation.
 
 ## Part of Project Bluefin
 
