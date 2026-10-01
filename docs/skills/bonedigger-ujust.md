@@ -114,6 +114,8 @@ Implemented in `projectbluefin/common/system_files/bluefin/usr/share/ublue-os/ju
 
 ## Optional deep hardware metrics (OTel)
 
+> **Known drift — do not implement from this section.** The sections below (OTel capture, the `glow` upload step, and the `$XDG_RUNTIME_DIR/ujust-report/report-XXXXXX/` + EXIT-trap output model) describe a retired design. The shipped `system_files/bluefin/usr/libexec/bonedigger-report` in `projectbluefin/common` has no OTel, no `python3`, no `glow`, and no EXIT trap; it writes drafts to `${XDG_STATE_HOME:-~/.local/state}/ujust-report/drafts/draft-XXXXXX` and deliberately preserves them for `--resume`. Read the script before relying on anything here.
+
 Gated on `/usr/share/ublue-os/otel/ujust-report-config.yaml` existing in the image. If present, the user is offered a 35-second hardware telemetry capture. Outputs two spec-compliant OTLP NDJSON files (one signal type per file, per OTel spec):
 
 - `metrics.otlp.jsonl` — CPU, memory, disk, filesystem, network, paging, processes, Podman containers
@@ -217,3 +219,7 @@ The recipe and OTel config are **image content**, not CI tooling. They live in `
 `common` ships both files to every image via `common.bst`. Dakota and bluefin inherit them automatically — do **not** add copies to those repos.
 
 **Sync workflows are the wrong answer.** If you find yourself creating a workflow to copy these files from bonedigger to common (or anywhere else), stop: the file is in the wrong repo. Edit it directly in common.
+
+## Related
+
+- [`bonedigger-screenshots`](bonedigger-screenshots.md) — how `ujust report` can capture and analyze a screenshot / screen photo on-device (the extension to this flow for users who can't take a clean screenshot).

@@ -40,6 +40,7 @@ Never report success before running these checks and reading the output.
 | [`bonedigger-ujust`](docs/skills/bonedigger-ujust.md) | Working on the `ujust report` diagnostics framework, PII scrubbing, OTel specs, gist intake, or console QR codes for reports |
 | [`bonedigger-qrcode`](docs/skills/bonedigger-qrcode.md) | Adding console QR output to `ujust report` so a phone can scan and open the report to voice-dictate into it |
 | [`bonedigger-templates`](docs/skills/bonedigger-templates.md) | Adding, editing, or syncing GitHub issue templates; working on `sync-templates.yml` |
+| [`bonedigger-screenshots`](docs/skills/bonedigger-screenshots.md) | Screenshot capture, on-device screenshot analysis, and screenshot privacy rules for `ujust report` |
 
 ## Quick orientation
 
