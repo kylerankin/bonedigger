@@ -72,7 +72,7 @@ Applied to every `journalctl -b -1 -k` excerpt. **Order matters** — MAC must r
 
 ## Crash / Panic Detection section
 
-Implemented in `projectbluefin/common/system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just`. All data sourced from `journalctl -b -1` (previous boot). All kernel excerpts pass through `scrub_kernel_log()` before landing in `summary.md`.
+Implemented in `projectbluefin/common/system_files/bluefin/usr/libexec/bonedigger-report` (the `60-bonedigger.just` recipe is only a thin exec shim). All data sourced from `journalctl -b -1` (previous boot). All kernel excerpts pass through `scrub_kernel_log()` before landing in `summary.md`.
 
 ### Boot end-state classifier (4 buckets — never assume)
 
@@ -211,8 +211,8 @@ The recipe, the `bonedigger-report` script, and the OTel config are **image cont
 
 | File | Path in common |
 |------|----------------|
-| `ujust report` recipe | `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just` |
-| Crash / panic detection | `system_files/bluefin/usr/libexec/bonedigger-report` |
+| `ujust report` recipe (thin exec shim) | `system_files/bluefin/usr/share/ublue-os/just/60-bonedigger.just` |
+| Report implementation script (arg parsing, baseline collection, profiles, scrubbing, draft creation, crash / panic detection) | `system_files/bluefin/usr/libexec/bonedigger-report` |
 | OTel collector config | `system_files/bluefin/usr/share/ublue-os/otel/ujust-report-config.yaml` |
 
 `common` ships all three files to every image via `common.bst`. Dakota and bluefin inherit them automatically — do **not** add copies to those repos.
